@@ -1,6 +1,6 @@
+---
 # SPDX-FileCopyrightText: 2021 Jeff Epler
 #
 # SPDX-License-Identifier: GPL-3.0-only
-
-*.o
-decoder
+BasedOnStyle: LLVM
+IndentWidth: 4
