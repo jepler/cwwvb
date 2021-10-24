@@ -63,7 +63,9 @@ look for the other 6 marks.  If those are all present, then a one-minute signal 
 
 ... and that's what is implemented so far in `decoder.cc`.
 
-(note that there's nothing special about 1/50s, it's simply the value I chose in the WWVB Observatory. This means
+(note that there's nothing special about 1/50s, it's simply the value I chose
+in the [WWVB
+Observatory](https://github.com/wwvb-observatory/wwvb-observatory). This means
 I can feed my test program WWVB Observatory data and analyze its performance.)
 
 # Next steps
