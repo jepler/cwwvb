@@ -82,4 +82,6 @@ This seems likely to be able to introduce & remove extra "start of second" signa
 40 but receiving a new sample into bucket 41 moves it to 41. Now, two "start of second" signals will have been issued 1/50s
 apart. Similarly, it seems possible to miss a whole second when SoS decreases (e.g., from 41 to 40).
 
+(Finally, if the signal is ALL noise, then SoS could change by an arbitrary distance, as all the counts would be close to equal and all the edge counts close to 0)
+
 This is fine while decoding WWVB signals; the resulting 60 WWVB symbols would not have valid marker bits. However, if it's desired to use SoS for local timekeeping this would need to be addressed.
