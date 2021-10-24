@@ -70,10 +70,13 @@ template <int N, int M> struct circular_symbol_array {
 // The second is divided into units of SUBSEC
 constexpr size_t SUBSEC = 50;
 // This many WWVB symbols are accumulated
-constexpr size_t SYMBOLS = 121;
+constexpr size_t SYMBOLS = 125;
 // This many raw samples are accumulated.  A slight code-size-savings is had
-// if it is 2*SYMBOLS.
+// if it is 2*SYMBOLS.  But, it must also be a multiple of SUBSEC, so that the
+// sample that 'falls out' of the buffer each time is the correct one to
+// subtract from the 'counts array!
 constexpr size_t BUFFER = 2 * SYMBOLS;
+static_assert(BUFFER % SUBSEC == 0);
 
 // Raw samples from the receiver
 circular_bit_array<BUFFER> d;
