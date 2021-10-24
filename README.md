@@ -85,3 +85,10 @@ apart. Similarly, it seems possible to miss a whole second when SoS decreases (e
 (Finally, if the signal is ALL noise, then SoS could change by an arbitrary distance, as all the counts would be close to equal and all the edge counts close to 0)
 
 This is fine while decoding WWVB signals; the resulting 60 WWVB symbols would not have valid marker bits. However, if it's desired to use SoS for local timekeeping this would need to be addressed.
+
+# Application to similar time signals
+
+Similar AM time signals in the 40-100kHz range include MSF (Britian), JJY40/60
+(Japan), and DCF77 (Germany).  The SoS-recovery code should work with all these
+signals, but the further layers of symbol-decoding and minute-decoding would
+differ.
