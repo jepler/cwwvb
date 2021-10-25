@@ -4,8 +4,8 @@
 
 all: size-decoder decoder
 
-decoder: decoder.cc
-	g++ -O -o $@ $^ -DMAIN
+decoder: decoder.cc | Makefile
+	g++ -Wall -g -Og -o $@ $< -DMAIN
 
 
 .PHONY: size-%
