@@ -21,7 +21,7 @@ std::atomic<int> symbol_count;
 void TimerHandler0(void) {
     int i = digitalRead(PIN_OUT);
     Serial.write(i ? '#' : '_');
-    if(update(i)) {
+    if (update(i)) {
         int sym = decode_symbol();
         symbols.put(sym);
         symbol_count.fetch_add(1);
@@ -30,10 +30,11 @@ void TimerHandler0(void) {
 
 int last_count = 0;
 void loop() {
-    while(Serial.available() > 0) Serial.read();
+    while (Serial.available() > 0)
+        Serial.read();
 
     int new_count = symbol_count.load();
-    if(new_count == last_count) {
+    if (new_count == last_count) {
         return;
     }
 
@@ -50,15 +51,15 @@ void loop() {
     interrupts();
 
     Serial.write('\t');
-    for(int i = 0; i<delta; i++) {
-        Serial.write('0' + symbols_snapshot.at(SYMBOLS-delta+i));
+    for (int i = 0; i < delta; i++) {
+        Serial.write('0' + symbols_snapshot.at(SYMBOLS - delta + i));
     }
     Serial.write(" ");
     Serial.print(sos_snapshot, DEC);
     Serial.write("\r\n");
-    if(symbols_snapshot.at(SYMBOLS-1) == 2) {
+    if (symbols_snapshot.at(SYMBOLS - 1) == 2) {
         wwvb_minute w;
-        if(decode_minute(symbols_snapshot, w)) {
+        if (decode_minute(symbols_snapshot, w)) {
             Serial.write(" ");
             Serial.print(w.year + 2000, DEC);
             Serial.print("-");
@@ -77,7 +78,6 @@ void loop() {
             struct tm tm;
             gmtime_r(&now, &tm);
 
-
             char buf[32];
             strftime(buf, sizeof(buf), "%FT%RZ", &tm);
             Serial.println(buf);
@@ -86,13 +86,13 @@ void loop() {
     last_count = new_count;
 }
 
-
 void setup() {
     pinMode(PIN_PDN, OUTPUT);
     pinMode(PIN_OUT, INPUT_PULLUP);
     digitalWrite(PIN_PDN, 0);
     Serial.begin(115200);
-    while (!Serial) { /* wait for connect */ }
+    while (!Serial) { /* wait for connect */
+    }
     Serial.println("hello world");
 
     wwvb_minute w = {};
@@ -108,7 +108,6 @@ void setup() {
 
     struct tm tm;
     gmtime_r(&now, &tm);
-
 
     char buf[32];
     strftime(buf, sizeof(buf), "%FT%RZ", &tm);

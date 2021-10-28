@@ -17,3 +17,5 @@ repos:
     rev: 'v11.0.1'
     hooks:
     -   id: clang-format
+        types_or: [file]
+        files: \.(cpp|h|ino)$
