@@ -215,3 +215,45 @@ void setup() {
     set_tc(0);
     Serial.write("\033[2J");
 }
+
+
+// This bridges from stdio output to Serial.write
+#include <errno.h>
+#undef errno
+extern int errno;
+extern "C" int _write(int file, char *ptr, int len);
+int _write(int file, char *ptr, int len) {
+    if (file < 1 || file > 3) {
+        errno = EBADF;
+        return -1;
+    }
+
+    if (file == 3) { // File 3 does not do \n -> \r\n transformation
+        Serial.write(ptr, len);
+        return len;
+    }
+
+    // color stderr bold
+    static bool red;
+    bool is_stderr = (file == 2);
+    if (is_stderr != red) {
+        if (is_stderr) {
+            Serial.write("\033[31m");
+        } else {
+            Serial.write("\033[0m");
+        }
+        red = is_stderr;
+    }
+
+    int result = len;
+    for (; len--; ptr++) {
+        int c = *ptr;
+        if (c == '\n')
+            Serial.write('\r');
+        Serial.write(c);
+    }
+    return result;
+}
+
+extern "C" int write(int file, char *ptr, int len);
+int write(int file, char *ptr, int len) __attribute__((alias("_write")));
