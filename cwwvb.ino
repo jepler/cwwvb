@@ -140,6 +140,7 @@ void loop() {
         for (int i = 0; i < sizeof(buf); i++) {
             buf[i] = '0' + snapshot.symbols.at(i);
         }
+        moveto(1, 25);
         printf("%.*s", sizeof(buf), buf);
     }
 
@@ -204,7 +205,7 @@ int _write(int file, char *ptr, int len) {
     bool is_stderr = (file == 2);
     if (is_stderr != red) {
         if (is_stderr) {
-            Serial.write("\033[31m");
+            Serial.write("\033[95m");
         } else {
             Serial.write("\033[0m");
         }
