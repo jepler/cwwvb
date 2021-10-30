@@ -23,8 +23,9 @@
 constexpr int TIMER0_INTERVAL_MS = 20;
 SAMDTimer ITimer0(TIMER_TC3);
 
-std::atomic<int> symbol_count;
 int cc;
+
+WWVBDecoder<> dec;
 
 void TimerHandler0(void) {
     int i = digitalRead(PIN_OUT);
@@ -32,35 +33,20 @@ void TimerHandler0(void) {
     digitalWrite(PIN_MON, LOW);
     TC3->COUNT16.CC[0].reg = cc;
 #if MONITOR_LL
-    Serial.write(i ? '#' : '_');
+    putc(i ? '#' : '_');
 #endif
-    if (update(i)) {
-        int sym = decode_symbol();
-#if MONITOR_SYM
-        Serial.write('\t');
-        Serial.write('0' + sym);
-        Serial.write('\n');
-#endif
-        symbols.put(sym);
-        symbol_count.fetch_add(1);
-    }
+    dec.update(i);
 }
 
-void moveto(int x, int y) {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "\033[%d;%dH", y, x);
-    Serial.write(buf);
-}
+void moveto(int x, int y) { printf("\033[%d;%dH", y, x); }
 
 int ss_I, ss_P;
 
 void set_tc(int n) {
     moveto(1, 25);
     cc = CENTRAL_COUNT + n;
-    char buf[64];
-    snprintf(buf, sizeof(buf), "Steer %+4d CC = %5d I = %+5d P=%+5d ", n, cc,
-             ss_I, ss_P);
-    Serial.print(buf);
+    fprintf(stderr, "Steer %+4d CC = %5d I = %+5d P=%+5d \n", n, cc, ss_I,
+            ss_P);
 }
 
 void steer_tc(int delta) { set_tc(cc - CENTRAL_COUNT + delta); }
@@ -81,7 +67,7 @@ void loop() {
         }
 #endif
     }
-    int new_count = symbol_count.load();
+    int new_count = dec.symbol_count.load();
     if (new_count == last_count) {
         return;
     }
@@ -89,15 +75,8 @@ void loop() {
     // unless something REALLY weird happens, delta should be 1!
     int delta = new_count - last_count;
 
-    circular_symbol_array<SYMBOLS, 2> symbols_snapshot;
-    int16_t counts_snapshot[SUBSEC], edges_snapshot[SUBSEC];
-    int sos_snapshot;
-    noInterrupts();
-    memcpy(&symbols_snapshot, &symbols, sizeof(symbols_snapshot));
-    memcpy(counts_snapshot, counts, sizeof(counts_snapshot));
-    memcpy(edges_snapshot, edges, sizeof(edges_snapshot));
-    sos_snapshot = sos;
-    interrupts();
+    WWVBDecoder<> snapshot;
+    dec.snapshot(snapshot);
 
 #if AUTO_STEERING
     // Try to steer the start-of-subsec to the "0" value
@@ -112,88 +91,76 @@ void loop() {
     //
     // Should add: I-term to force error to 0, hold while signal quality
     // is not known, and some kind of fractional control.
-    ss_P = mod_diff<SUBSEC>(sos_snapshot, 0);
+    ss_P = mod_diff<snapshot.SUBSEC>(snapshot.sos, 0);
     ss_I += ss_P;
     set_tc(ss_P * 4 + ss_I / 20);
 #endif
 
     {
 #define ROWS (22)
-        char screen[ROWS][SUBSEC];
+        char screen[ROWS][snapshot.SUBSEC];
         memset(screen, ' ', sizeof(screen));
 
         int max_counts = 0;
         int max_edges = 0;
-        for (int i = 0; i < SUBSEC; i++) {
-            max_counts = std::max(max_counts, (int)counts_snapshot[i]);
-            max_edges = std::max(max_edges, (int)abs(edges_snapshot[i]));
+        for (int i = 0; i < snapshot.SUBSEC; i++) {
+            max_counts = std::max(max_counts, (int)snapshot.counts[i]);
+            max_edges = std::max(max_edges, (int)abs(snapshot.edges[i]));
         }
         for (int i = 0; i < ROWS; i++) {
-            screen[i][sos_snapshot] = '.';
+            screen[i][snapshot.sos] = '.';
         }
-        for (int i = 0; i < SUBSEC; i++) {
+        for (int i = 0; i < snapshot.SUBSEC; i++) {
             int j = i;
-            while (j >= SUBSEC)
-                j -= SUBSEC;
+            while (j >= snapshot.SUBSEC)
+                j -= snapshot.SUBSEC;
 
             {
                 int r =
-                    ROWS / 2 - edges_snapshot[j] * (ROWS - 1) / max_edges / 2;
-                if (r < 0 || r >= ROWS) {
-                    Serial.println("r out of range [edges]");
-                    Serial.println(i);
-                    Serial.println(j);
-                    Serial.println(r);
-                    continue;
-                }
+                    ROWS / 2 - snapshot.edges[j] * (ROWS - 1) / max_edges / 2;
                 screen[r][i] = '_';
             }
 
             {
                 int r = ROWS - 1 -
-                        counts_snapshot[j] * ROWS / (1 + BUFFER / SUBSEC);
-                if (r < 0 || r >= ROWS) {
-                    Serial.println("r out of range");
-                    Serial.println(r);
-                } else {
-                    screen[r][i] = '#';
-                }
+                        snapshot.counts[j] * ROWS /
+                            (1 + snapshot.BUFFER / snapshot.SUBSEC);
+                screen[r][i] = '#';
             }
         }
 
         moveto(1, 2);
         for (int i = 0; i < ROWS; i++) {
-            Serial.write(screen[i], SUBSEC);
-            Serial.write("|\r\n");
+            printf("%.*s|\n", snapshot.SUBSEC, screen[i]);
         }
     }
 
     {
-        char buf[SYMBOLS];
+        char buf[snapshot.SYMBOLS];
         for (int i = 0; i < sizeof(buf); i++) {
-            buf[i] = '0' + symbols_snapshot.at(i);
+            buf[i] = '0' + snapshot.symbols.at(i);
         }
-        Serial.write(buf, sizeof(buf));
+        printf("%.*s", sizeof(buf), buf);
     }
 
-    if (symbols_snapshot.at(SYMBOLS - 1) == 2) {
-
-        wwvb_minute w;
+    if (snapshot.symbols.at(snapshot.SYMBOLS - 1) == 2) {
+        wwvb_time w;
         moveto(1, 1);
-        if (decode_minute(symbols_snapshot, w)) {
-            time_t now = wwvb_to_utc(w);
+        if (snapshot.decode_minute(w)) {
+            time_t now = w.to_utc();
 
             struct tm tm;
             gmtime_r(&now, &tm);
 
             char buf[32];
             strftime(buf, sizeof(buf), "%FT%RZ", &tm);
-            Serial.println(buf);
+            printf("%s\n", buf);
         }
     }
     last_count = new_count;
 }
 
+extern "C" int write(int file, char *ptr, int len);
 void setup() {
     pinMode(PIN_PDN, OUTPUT);
     pinMode(PIN_MON, OUTPUT);
@@ -213,9 +180,8 @@ void setup() {
     // and making it _SMALLER_ makes the `sos` value incrase over time.
     // (making the interrupt _faster_)
     set_tc(0);
-    Serial.write("\033[2J");
+    printf("\033[2J");
 }
-
 
 // This bridges from stdio output to Serial.write
 #include <errno.h>

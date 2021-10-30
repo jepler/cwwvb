@@ -8,37 +8,25 @@
 
 #include "decoder.h"
 
-// Raw samples from the receiver
-circular_bit_array<BUFFER> d;
-// Statistical information about the raw samples
-int16_t counts[SUBSEC], edges[SUBSEC];
-// subsec counts the position modulo SUBSEC; sos is the start-of-second modulo
-// SUBSEC
-int16_t subsec = 0, sos = 0;
-// Decoded symbols
-circular_symbol_array<SYMBOLS, 2> symbols;
-size_t tss; // time since second
-
-bool bcderr; // bcd (or any) decoding error
-
-time_t wwvb_to_utc(const wwvb_minute &m) {
+time_t wwvb_time::to_utc() const {
     struct tm tm = {};
-    tm.tm_year = 100 + m.year;
+    tm.tm_year = 100 + year;
     tm.tm_mday = 1;
     time_t t = mktime(&tm);
-    t += (m.yday - 1) * 86400 + m.hour * 3600 + m.minute * 60;
+    t += (yday - 1) * 86400 + hour * 3600 + minute * 60;
+    t += (second == 60) ? 59 : second;
     return t;
 }
 
-struct tm apply_zone_and_dst(const wwvb_minute &m, int zone_offset,
-                             bool observe_dst) {
-    auto t = wwvb_to_utc(m);
+struct tm wwvb_time::apply_zone_and_dst(int zone_offset,
+                                        bool observe_dst) const {
+    auto t = to_utc();
     t -= zone_offset * 3600;
 
     struct tm tm;
     gmtime_r(&t, &tm);
 
-    switch (m.dst) {
+    switch (dst) {
     case 0: // Standard time in effect
         observe_dst = false;
 
@@ -67,6 +55,10 @@ struct tm apply_zone_and_dst(const wwvb_minute &m, int zone_offset,
         t += 3600;
 
     gmtime_r(&t, &tm);
+
+    if (second == 60) {
+        tm.tm_sec++;
+    }
     return tm;
 }
 
@@ -75,6 +67,7 @@ struct tm apply_zone_and_dst(const wwvb_minute &m, int zone_offset,
 using namespace std;
 
 int main() {
+    WWVBDecoder<> dec;
 
     static char zone[] = "TZ=UTC";
     putenv(zone);
@@ -85,25 +78,24 @@ int main() {
         if (c != '_' && c != '#') {
             continue;
         }
-        if (update(c == '_')) {
-            int sym = decode_symbol();
-            symbols.put(sym);
+        if (dec.update(c == '_')) {
             si++;
+            auto sym = dec.symbols.at(dec.SYMBOLS - 1);
             // std::cout << sym;
             // if(si % 60 == 0) std::cout << "\n";
             if (sym == 2) {
                 // This mark could be the minute-ending mark, so try to
                 // decode a minute
-                wwvb_minute m;
-                if (decode_minute(symbols, m)) {
+                wwvb_time m;
+                if (dec.decode_minute(m)) {
                     d++;
-                    time_t t = wwvb_to_utc(m);
+                    time_t t = m.to_utc();
                     struct tm tt;
                     gmtime_r(&t, &tt);
                     printf("[%7.2f] %4d-%02d-%02d %2d:%02d %d %d\n", i / 50.,
                            1900 + tt.tm_year, tt.tm_mon + 1, tt.tm_mday,
                            tt.tm_hour, tt.tm_min, m.ly, m.dst);
-                    tt = apply_zone_and_dst(m, 6, true);
+                    tt = m.apply_zone_and_dst(6, true);
                     printf("          %4d-%02d-%02d %2d:%02d\n",
                            1900 + tt.tm_year, tt.tm_mon + 1, tt.tm_mday,
                            tt.tm_hour, tt.tm_min);
