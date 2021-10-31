@@ -16,16 +16,58 @@
 #define MONITOR_LL (0)
 #define MONITOR_SYM (0)
 
-#define CENTRAL_COUNT (59963)
 #define AUTO_STEERING (1)
 
 // SAMD51 Hardware Timer only TC3
+// We override this below, but the value puts the predivider into a good range
+// for us (/8 prescaler)
 constexpr int TIMER0_INTERVAL_MS = 20;
 SAMDTimer ITimer0(TIMER_TC3);
 
 int cc;
 
 WWVBDecoder<> dec;
+constexpr int CENTRAL_COUNT = 3000000 / dec.SUBSEC;
+static_assert(CENTRAL_COUNT <= 65535);
+
+struct Critical {
+    Critical() { noInterrupts(); }
+    ~Critical() { interrupts(); }
+};
+
+typedef void (*work)();
+struct Work {
+    int head, tail;
+    static constexpr int size = 6;
+    work todo[size];
+
+    void put(work fun) {
+        todo[head] = fun;
+        head = (head + 1) % size;
+        if (head == tail)
+            abort();
+    }
+
+    work take() {
+        Critical _;
+        work result = nullptr;
+        if (tail != head) {
+            result = todo[tail];
+            tail = (tail + 1) % size;
+        }
+        return result;
+    }
+
+    bool empty() {
+        Critical _;
+        return tail == head;
+    }
+} wq;
+
+static void tick();
+static void try_decode();
+
+std::atomic<int> introduced_error;
 
 void TimerHandler0(void) {
     int i = digitalRead(PIN_OUT);
@@ -35,26 +77,63 @@ void TimerHandler0(void) {
 #if MONITOR_LL
     putc(i ? '#' : '_');
 #endif
-    dec.update(i);
+    if (introduced_error.load()) {
+        introduced_error.fetch_sub(1);
+        return;
+    }
+    if (dec.update(i)) {
+        wq.put(try_decode);
+    }
+    auto subsec = mod_diff<dec.SUBSEC>(dec.sos, dec.SUBSEC - 5);
+    if (subsec == 0) {
+        wq.put(tick);
+    }
 }
 
 void moveto(int x, int y) { printf("\033[%d;%dH", y, x); }
 
 int ss_I, ss_P;
 
-void set_tc(int n) {
+void set_tc(int n, bool hold) {
     moveto(1, 25);
+    // max 1% adjustment
+    if (n > CENTRAL_COUNT / 100)
+        n = CENTRAL_COUNT / 100;
+    if (n < -(int)CENTRAL_COUNT / 100)
+        n = -(int)CENTRAL_COUNT / 100;
     cc = CENTRAL_COUNT + n;
-    fprintf(stderr, "Steer %+4d CC = %5d I = %+5d P=%+5d \n", n, cc, ss_I,
-            ss_P);
+    fprintf(stderr, "Steer %+4d CC = %5d I = %+5d P=%+5d %.4s\n", n, cc, ss_I,
+            ss_P, hold ? "HOLD" : "INTG");
 }
 
-void steer_tc(int delta) { set_tc(cc - CENTRAL_COUNT + delta); }
+void steer_tc(int delta) { set_tc(cc - CENTRAL_COUNT + delta, false); }
 
-int last_count = 0;
+bool ever_set;
+wwvb_time w;
+
+void display_time() {
+    time_t now = w.to_utc();
+
+    struct tm tm;
+    gmtime_r(&now, &tm);
+
+    moveto(1, 1);
+    char buf[32];
+    strftime(buf, sizeof(buf), "%FT%TZ", &tm);
+    printf("%s ", buf);
+
+    tm = w.apply_zone_and_dst(6, true);
+    strftime(buf, sizeof(buf), "%FT%T", &tm);
+    printf("%s C%cT ls=%d ly=%d dst=%d dut1=%+2d", buf, tm.tm_isdst ? 'D' : 'S',
+           w.ls, w.ly, w.dst, w.dut1);
+}
+
 void loop() {
     while (Serial.available() > 0) {
         int c = Serial.read();
+        if (c == 'x') {
+            introduced_error.fetch_add(5);
+        }
 #if !AUTO_STEERING
         if (c == '+' || c == '=') {
             steer_tc(1);
@@ -67,33 +146,39 @@ void loop() {
         }
 #endif
     }
-    int new_count = dec.symbol_count.load();
-    if (new_count == last_count) {
-        return;
+
+    {
+        Critical _;
+
+        if (wq.empty()) {
+            __WFI();
+            return;
+        }
     }
 
-    // unless something REALLY weird happens, delta should be 1!
-    int delta = new_count - last_count;
+    digitalWrite(PIN_LED, HIGH);
+    wq.take()();
+    digitalWrite(PIN_LED, LOW);
+}
 
-    WWVBDecoder<> snapshot;
-    dec.snapshot(snapshot);
+void try_decode() {
+    decltype(dec) snapshot;
+    {
+        Critical _;
+        snapshot = dec;
+    }
 
 #if AUTO_STEERING
     // Try to steer the start-of-subsec to the "0" value
-    // This is a simple proportional(ish) control, which should
-    // settle with some constant phase error. (or, more likely, oscillate
+    // This is a simple PI control, which should
+    // settle with almost no phase error. (or, more likely, oscillate
     // around two nearby values)
-    //
-    // Problems:
-    //  * during signal loss, the adjustment can be totally wrong
-    //  * it's very coarse
-    //  * the CENTRAL_COUNT value has to be pretty close
-    //
-    // Should add: I-term to force error to 0, hold while signal quality
-    // is not known, and some kind of fractional control.
+    bool hold = snapshot.health < snapshot.HEALTH_97PCT;
     ss_P = mod_diff<snapshot.SUBSEC>(snapshot.sos, 0);
-    ss_I += ss_P;
-    set_tc(ss_P * 4 + ss_I / 20);
+    if (!hold) {
+        ss_I += ss_P;
+    }
+    set_tc(ss_P * 4 + ss_I / 20, hold);
 #endif
 
     {
@@ -141,30 +226,32 @@ void loop() {
             buf[i] = '0' + snapshot.symbols.at(i);
         }
         moveto(1, 25);
-        printf("%.*s", sizeof(buf), buf);
+        printf("%.*s health=%3d%%", sizeof(buf), buf,
+               snapshot.health * 100 / snapshot.MAX_HEALTH);
     }
 
     if (snapshot.symbols.at(snapshot.SYMBOLS - 1) == 2) {
-        wwvb_time w;
-        moveto(1, 1);
         if (snapshot.decode_minute(w)) {
-            time_t now = w.to_utc();
-
-            struct tm tm;
-            gmtime_r(&now, &tm);
-
-            char buf[32];
-            strftime(buf, sizeof(buf), "%FT%RZ", &tm);
-            printf("%s\n", buf);
+            w.advance_minutes();
+            ever_set = true;
         }
     }
-    last_count = new_count;
+
+    if (ever_set) {
+        tick();
+    }
+}
+
+void tick() {
+    w.advance_seconds();
+    display_time();
 }
 
 extern "C" int write(int file, char *ptr, int len);
 void setup() {
     pinMode(PIN_PDN, OUTPUT);
     pinMode(PIN_MON, OUTPUT);
+    pinMode(PIN_LED, OUTPUT);
     pinMode(PIN_OUT, INPUT_PULLUP);
     digitalWrite(PIN_PDN, 0);
     Serial.begin(115200);
@@ -180,7 +267,7 @@ void setup() {
     // (because it makes the interrupt _slower_)
     // and making it _SMALLER_ makes the `sos` value incrase over time.
     // (making the interrupt _faster_)
-    set_tc(0);
+    set_tc(0, false);
     printf("\033[2J");
 }
 

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <array>
-#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -89,15 +88,15 @@ template <int N, int M> struct circular_symbol_array {
 struct wwvb_time {
     int16_t yday;
     int8_t year, hour, minute, second;
-    int8_t ly, dst;
+    int8_t ls, ly, dst, dut1;
     int8_t month, mday;
 
     time_t to_utc() const;
     struct tm apply_zone_and_dst(int zone_offset, bool observe_dst) const;
 
     int seconds_in_minute() const;
-    int advance_second();
-    int advance_minute();
+    void advance_seconds(int n = 1);
+    void advance_minutes(int n = 1);
 
     bool operator==(const wwvb_time &other) const;
 };
@@ -119,10 +118,10 @@ struct WWVBDecoder {
     typedef circular_bit_array<BUFFER> signal_buffer_type;
 
     // Total number of samples ever received
-    std::atomic<size_t> sample_count{};
+    size_t sample_count{};
 
     // Total number of symbols ever decoded
-    std::atomic<size_t> symbol_count{};
+    size_t symbol_count{};
 
     // Raw samples from the receiver
     signal_buffer_type signal{};
@@ -130,6 +129,10 @@ struct WWVBDecoder {
     // Statistical information about the raw samples
     std::array<int16_t, SUBSEC> counts{};
     std::array<int16_t, SUBSEC> edges{};
+
+    // Statistical information about the symbols
+    int health{};
+    std::array<uint8_t, SYMBOLS> health_history{};
 
     // subsec counts the position modulo SUBSEC; sos is the start-of-second
     // modulo SUBSEC.  tss is the time in ticks since the last second.
@@ -146,7 +149,7 @@ struct WWVBDecoder {
 
     bool update(bool b) {
         // Put the new bit & extract the old bit
-        sample_count.fetch_add(1);
+        sample_count++;
         auto ob = signal.put(b);
 
         // Update the counts array
@@ -187,8 +190,7 @@ struct WWVBDecoder {
         // either reset or increment time-since-second
         if (result) {
             tss = 0;
-            symbols.put(decode_symbol());
-            symbol_count.fetch_add(1);
+            decode_symbol();
         } else {
             tss++;
         }
@@ -206,23 +208,62 @@ struct WWVBDecoder {
         return result;
     }
 
-    constexpr int offset_ms(int ms) {
-        return (ms + SUBSEC / 2) * SUBSEC / 1000;
+    static constexpr int ms_in_subsec(int ms) {
+        return (ms * SUBSEC + SUBSEC / 2) / 1000;
+    }
+
+    static constexpr auto p0 = ms_in_subsec(0);
+    static constexpr auto p1 = ms_in_subsec(200);
+    static constexpr auto p2 = ms_in_subsec(500);
+    static constexpr auto p3 = ms_in_subsec(800);
+    static constexpr auto p4 = ms_in_subsec(1000);
+
+    static constexpr auto la = p1 - p0;
+    static constexpr auto lb = p2 - p1;
+    static constexpr auto lc = p3 - p2;
+    static constexpr auto ld = p4 - p3;
+
+    static constexpr auto MAX_HEALTH = SYMBOLS * SUBSEC;
+    // In around 300 hours of logs from the WWVB observatory, the current
+    // algorithm decoded 16004 minutes (at all, not back-checked for
+    // correctness).  Of those, minutes about 86% had health above 97%.  That
+    // makes 97% a plausible threshold for a healthy signal.
+    static constexpr auto HEALTH_97PCT = MAX_HEALTH * 97 / 100;
+
+    int check_health(int count, int length, int expect) {
+        return expect ? count : length - count;
     }
 
     // We're informed that a new second _just started_, so
     // signal.at(BUFFER-1) is the first sample of the new second. and
-    // signal.at(BUFFER-SUBSEC-1) is the
-    int decode_symbol() {
+    // signal.at(BUFFER-SUBSEC-1) is the first sample of the previous second
+    void decode_symbol() {
         constexpr auto OFFSET = BUFFER - SUBSEC - 1;
-        int count_a = count(OFFSET + offset_ms(200), OFFSET + offset_ms(500));
-        int count_b = count(OFFSET + offset_ms(500), OFFSET + offset_ms(800));
+        int count_a = count(OFFSET + p0, OFFSET + p1);
+        int count_b = count(OFFSET + p1, OFFSET + p2);
+        int count_c = count(OFFSET + p2, OFFSET + p3);
+        int count_d = count(OFFSET + p3, OFFSET + p4);
 
-        if (count_b > 7)
-            return 2;
-        if (count_a > 7)
-            return 1;
-        return 0;
+        int result = 0;
+
+        if (count_c > lc / 2)
+            result = 2;
+        else if (count_b > lb / 2)
+            result = 1;
+
+        int h = 0;
+        h += check_health(count_a, la, 1);
+        h += check_health(count_b, lb, result != 0);
+        h += check_health(count_c, lc, result == 2);
+        h += check_health(count_d, ld, 0);
+
+        int sc = symbol_count++;
+        int si = sc % SYMBOLS;
+        int oh = health_history[si];
+        health_history[si] = h;
+        health += (h - oh);
+
+        symbols.put(result);
     }
 
     mutable bool bcderr;
@@ -262,22 +303,21 @@ struct WWVBDecoder {
         m.hour = decode_bcd(18, 17, 16, 15, 13, 12);
         m.minute = decode_bcd(8, 7, 6, 5, 3, 2, 1);
         m.ly = decode_bcd(55);
+        m.ls = decode_bcd(56);
         m.dst = decode_bcd(58, 57);
         m.second = 0;
+        int abs_dut1 = decode_bcd(43, 42, 41, 40);
+        int dut1_sign = decode_bcd(38, 37, 36);
+        switch (dut1_sign) {
+        case 2:
+            m.dut1 = -abs_dut1;
+            break;
+        case 5:
+            m.dut1 = abs_dut1;
+            break;
+        default:
+            bcderr = true;
+        }
         return !bcderr;
-    }
-
-    // Consistently snapshot *this into other, including if update() is called
-    // from an interrupt
-    void snapshot(WWVBDecoder &other) const {
-        int count;
-        do {
-            count = sample_count.load();
-            other.symbols = symbols;
-            other.counts = counts;
-            other.edges = edges;
-            other.sos = sos;
-            other.tss = tss;
-        } while (count != sample_count.load());
     }
 };
