@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 FIRMWARE = firmware/cwwvb.ino.elf
-all: size-decoder decoder $(FIRMWARE)
+all: decoder $(FIRMWARE)
 
 decoder: decoder.cpp Makefile decoder.h
 	g++ -Wall -g -Og -o $@ $< -DMAIN
@@ -18,7 +18,3 @@ PORT := /dev/ttyACM0
 .PHONY: flash
 flash: $(FIRMWARE)
 	arduino-cli upload  -b adafruit:samd:adafruit_feather_m4 -i $(FIRMWARE:.elf=.hex) -p $(PORT)
-
-.PHONY: size-%
-size-%: %.cpp
-	arm-none-eabi-g++ -mcpu=cortex-m4 -Os -c $< && size $*.o && nm -C --print-size --size-sort $*.o
