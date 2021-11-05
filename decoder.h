@@ -72,7 +72,7 @@ template <int N, int M> struct circular_symbol_array {
         return result;
     }
 
-    bool put(int v) {
+    int put(int v) {
         int result = 0;
         for (int j = 0; j < M; j++) {
             result = (result << 1) | data.put(v & (1 << (M - 1)));
@@ -89,7 +89,6 @@ struct wwvb_time {
     int16_t yday;
     int8_t year, hour, minute, second;
     int8_t ls, ly, dst, dut1;
-    int8_t month, mday;
 
     time_t to_utc() const;
     struct tm apply_zone_and_dst(int zone_offset, bool observe_dst) const;
@@ -234,11 +233,16 @@ struct WWVBDecoder {
         return expect ? count : length - count;
     }
 
-    // We're informed that a new second _just started_, so
-    // signal.at(BUFFER-1) is the first sample of the new second. and
-    // signal.at(BUFFER-SUBSEC-1) is the first sample of the previous second
+    // A second just concluded, so signal.at(BUFFER-1) is the last sample of
+    // the second, and signal.at(BUFFER-SUBSEC) is the first sample of the
+    // second
     void decode_symbol() {
-        constexpr auto OFFSET = BUFFER - SUBSEC - 1;
+        constexpr auto OFFSET = BUFFER - SUBSEC;
+#if 0
+        for(size_t i=0; i<SUBSEC; i++) {
+            printf("%c", signal.at(OFFSET + i) ? '_' : '#');
+        }
+#endif
         int count_a = count(OFFSET + p0, OFFSET + p1);
         int count_b = count(OFFSET + p1, OFFSET + p2);
         int count_c = count(OFFSET + p2, OFFSET + p3);
@@ -246,16 +250,23 @@ struct WWVBDecoder {
 
         int result = 0;
 
-        if (count_c > lc / 2)
-            result = 2;
-        else if (count_b > lb / 2)
+        if (count_c > lc / 2) {
+            if (count_b > lb / 2) {
+                result = 2;
+            } else {
+                result = 3; // a nonsense symbol
+            }
+        } else if (count_b > lb / 2) {
             result = 1;
+        }
 
         int h = 0;
-        h += check_health(count_a, la, 1);
-        h += check_health(count_b, lb, result != 0);
-        h += check_health(count_c, lc, result == 2);
-        h += check_health(count_d, ld, 0);
+        if (result != 3) {
+            h += check_health(count_a, la, 1);
+            h += check_health(count_b, lb, result != 0);
+            h += check_health(count_c, lc, result == 2);
+            h += check_health(count_d, ld, 0);
+        }
 
         int sc = symbol_count++;
         int si = sc % SYMBOLS;
@@ -264,6 +275,14 @@ struct WWVBDecoder {
         health += (h - oh);
 
         symbols.put(result);
+
+#if 0
+        printf(" %d\n", result);
+        for(size_t i=0; i<SYMBOLS; i++) {
+            printf("%d", symbols.at(i));
+        }
+        printf("\n", result);
+#endif
     }
 
     mutable bool bcderr;

@@ -26,6 +26,8 @@ SAMDTimer ITimer0(TIMER_TC3);
 
 int cc;
 
+int tick_subsec;
+
 WWVBDecoder<> dec;
 constexpr int CENTRAL_COUNT = 3000000 / dec.SUBSEC;
 static_assert(CENTRAL_COUNT <= 65535);
@@ -75,7 +77,7 @@ void TimerHandler0(void) {
     digitalWrite(PIN_MON, LOW);
     TC3->COUNT16.CC[0].reg = cc;
 #if MONITOR_LL
-    putc(i ? '#' : '_');
+    putc(i ? '_' : '#', stderr);
 #endif
     if (introduced_error.load()) {
         introduced_error.fetch_sub(1);
@@ -84,7 +86,8 @@ void TimerHandler0(void) {
     if (dec.update(i)) {
         wq.put(try_decode);
     }
-    auto subsec = mod_diff<dec.SUBSEC>(dec.sos, dec.SUBSEC - 5);
+
+    auto subsec = mod_diff<dec.SUBSEC>(dec.subsec, tick_subsec);
     if (subsec == 0) {
         wq.put(tick);
     }
@@ -102,6 +105,8 @@ void set_tc(int n, bool hold) {
     if (n < -(int)CENTRAL_COUNT / 100)
         n = -(int)CENTRAL_COUNT / 100;
     cc = CENTRAL_COUNT + n;
+    moveto(1, 24);
+    fflush(stdout);
     fprintf(stderr, "Steer %+4d CC = %5d I = %+5d P=%+5d %.4s\n", n, cc, ss_I,
             ss_P, hold ? "HOLD" : "INTG");
 }
@@ -158,6 +163,7 @@ void loop() {
 
     digitalWrite(PIN_LED, HIGH);
     wq.take()();
+    fflush(stdout);
     digitalWrite(PIN_LED, LOW);
 }
 
@@ -223,7 +229,8 @@ void try_decode() {
     {
         char buf[snapshot.SYMBOLS];
         for (int i = 0; i < sizeof(buf); i++) {
-            buf[i] = '0' + snapshot.symbols.at(i);
+            static const char sym2char[] = "012?";
+            buf[i] = sym2char[snapshot.symbols.at(i)];
         }
         moveto(1, 25);
         printf("%.*s health=%3d%%", sizeof(buf), buf,
@@ -232,19 +239,19 @@ void try_decode() {
 
     if (snapshot.symbols.at(snapshot.SYMBOLS - 1) == 2) {
         if (snapshot.decode_minute(w)) {
+            tick_subsec = mod_diff<snapshot.SUBSEC>(snapshot.sos, 5);
             w.advance_minutes();
             ever_set = true;
+            display_time();
         }
-    }
-
-    if (ever_set) {
-        tick();
     }
 }
 
 void tick() {
+    // if (ever_set) {
     w.advance_seconds();
     display_time();
+    //}
 }
 
 extern "C" int write(int file, char *ptr, int len);

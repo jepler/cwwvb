@@ -104,8 +104,12 @@ static bool last_yday(int year) { return 365 + isly(year); }
 
 // advance to exactly the top of the n'th minute from now
 void wwvb_time::advance_minutes(int n) {
-    if (seconds_in_minute() == 61) {
+    if (seconds_in_minute() != 60) {
         ls = 0;
+        if (dut1 < 0)
+            dut1 += 10;
+        else if (dut1 > 0)
+            dut1 -= 10;
     }
 
     second = 0;
@@ -122,7 +126,7 @@ void wwvb_time::advance_minutes(int n) {
     yday++;
     if (dst == 1)
         dst = 0;
-    if (dst == 2)
+    else if (dst == 2)
         dst = 3;
     if (yday < last_yday(year))
         return;
@@ -137,7 +141,7 @@ void wwvb_time::advance_minutes(int n) {
 using namespace std;
 
 int main() {
-    WWVBDecoder<120> dec;
+    WWVBDecoder<> dec;
 
     static char zone[] = "TZ=UTC";
     putenv(zone);

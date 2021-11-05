@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 FIRMWARE = firmware/cwwvb.ino.elf
-all: decoder $(FIRMWARE)
+all: decoder $(FIRMWARE) run-tests
 
 decoder: decoder.cpp Makefile decoder.h
 	g++ -Wall -g -Og -o $@ $< -DMAIN
@@ -18,3 +18,14 @@ PORT := /dev/ttyACM0
 .PHONY: flash
 flash: $(FIRMWARE)
 	arduino-cli upload  -b adafruit:samd:adafruit_feather_m4 -i $(FIRMWARE:.elf=.hex) -p $(PORT)
+
+.PHONY: clean
+clean:
+	rm -f *.o decoder firmware
+
+.PHONY: run-tests
+run-tests: tests
+	./tests
+
+tests: decoder.cpp decoder.h Makefile tests.cpp
+	g++ -Wall -g -Og -o $@ $(filter %.cpp, $^)
