@@ -240,7 +240,12 @@ void try_decode() {
     if (snapshot.symbols.at(snapshot.SYMBOLS - 1) == 2) {
         if (snapshot.decode_minute(w)) {
             tick_subsec = mod_diff<snapshot.SUBSEC>(snapshot.sos, 5);
-            w.advance_minutes();
+            // Must advance by seconds instead of by a minute, because
+            // if this just-received minute has a leap second,
+            // advancing 1 minute leaves us at the wrong moment, because we're
+            // at just 60 seconds into the minute. (23:59:60 instead of
+            // 00:00:00 next day)
+            w.advance_seconds(60);
             ever_set = true;
             display_time();
         }
