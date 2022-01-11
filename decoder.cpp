@@ -100,7 +100,7 @@ static bool isly(int year) {
     return true;
 }
 
-static bool last_yday(int year) { return 365 + isly(year); }
+static int last_yday(int year) { return 365 + isly(year); }
 
 // advance to exactly the top of the n'th minute from now
 void wwvb_time::advance_minutes(int n) {
