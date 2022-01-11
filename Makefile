@@ -6,7 +6,7 @@ FIRMWARE = firmware/cwwvb.ino.elf
 all: decoder $(FIRMWARE) run-tests
 
 decoder: decoder.cpp Makefile decoder.h
-	g++ -Wall -g -Og -o $@ $< -DMAIN
+	$(CXX) -Wall -g -Og -o $@ $< -DMAIN
 
 .PHONY: arduino
 arduino: $(FIRMWARE)
@@ -21,11 +21,11 @@ flash: $(FIRMWARE)
 
 .PHONY: clean
 clean:
-	rm -f *.o decoder firmware
+	rm -rf *.o decoder firmware
 
 .PHONY: run-tests
 run-tests: tests
 	./tests
 
 tests: decoder.cpp decoder.h Makefile tests.cpp
-	g++ -Wall -g -Og -o $@ $(filter %.cpp, $^)
+	$(CXX) -Wall -g -Og -o $@ $(filter %.cpp, $^)
