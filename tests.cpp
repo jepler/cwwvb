@@ -118,7 +118,29 @@ TEST_CASE("test std next day") {
 
     ww.advance_seconds();
     CHECK(ww.second == 0);
+    CHECK(ww.minute == 0);
+    CHECK(ww.hour == 0);
     CHECK(ww.dst == 0);
+    CHECK(ww.yday == 312);
+    CHECK(ww.year == 21);
 }
 
+TEST_CASE("test new year") {
+    struct wwvb_time ww = {
+        .yday = 365,
+        .year = 1,
+        .hour = 23,
+        .minute = 59,
+        .second = 59,
+        .ls = 0,
+        .ly = 0,
+        .dst = 0,
+    };
+    ww.advance_seconds();
+    CHECK(ww.second == 0);
+    CHECK(ww.minute == 0);
+    CHECK(ww.hour == 0);
+    CHECK(ww.year == 2);
+    CHECK(ww.yday == 1);
+}
 #endif
